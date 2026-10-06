@@ -1,88 +1,72 @@
-# CityCar — AI Operator / AI Agent Test Assignment
+# CityCar — AI Agent Architecture Case Study
 
-## Goal
+**A production-oriented design for evidence-based sales analytics with AI agents.**
 
-Design an AI system that can answer a manager's request:
+This repository demonstrates how I would design an AI system that answers a manager's request:
 
 > «Проанализируй работу отдела продаж за последние 30 дней».
 
-The system combines CRM data from amoCRM and call recordings from the telephony provider, produces an evidence-based sales analysis, and escalates low-confidence or high-impact conclusions to a human.
+The system combines CRM data and call analysis, separates deterministic metrics from model-generated interpretation, and routes sensitive or low-confidence conclusions through human review.
 
-## 1. Architecture
+## Architecture
 
-~~~mermaid
-flowchart LR
-    M[Manager] --> O[AI Orchestrator]
-    O --> C[CRM Agent]
-    O --> T[Telephony Agent]
-    O --> A[Analytics Agent]
-    O --> R[Report Generator]
-    C --> AMO[amoCRM API v4]
-    T --> TEL[Telephony API]
-    TEL --> S[(Call recordings)]
-    S --> STT[Speech-to-Text]
-    STT --> LLM[LLM analysis]
-    AMO --> D[(PostgreSQL)]
-    LLM --> D
-    A --> D
-    D --> R
-    R --> H{Confidence / impact check}
-    H -->|High confidence| M
-    H -->|Low confidence / sensitive| REV[Human review]
-    REV --> M
-    CACHE[(Redis / cache)] -.-> C
-    CACHE -.-> T
-~~~
+```
+Manager
+   ↓
+AI Orchestrator
+   ├── CRM Agent ─────────→ amoCRM API
+   ├── Telephony Agent ──→ calls / recordings
+   ├── Analytics Agent
+   └── Report Generator
+            ↓
+      Confidence / Impact Gate
+         ↙           ↘
+   auto-delivery    human review
+```
 
-### Components
+## Agent responsibilities
 
-**AI Orchestrator**
-- Receives the natural-language request.
-- Resolves the time range: last 30 days.
-- Starts the required agents.
-- Tracks execution status and confidence.
-- Combines structured CRM metrics and call-analysis results.
+### AI Orchestrator
+- interprets the request and time range;
+- starts the required agents;
+- tracks execution state and confidence;
+- combines structured and unstructured evidence.
 
-**CRM Agent**
-- Reads deals and tasks from amoCRM API v4.
-- Collects pipeline, status, responsible manager, value, task completion and overdue-task information.
-- Stores normalized snapshots for reproducible analysis.
+### CRM Agent
+Collects deals, pipeline state, responsible managers, values, tasks and overdue work through amoCRM API v4.
 
-**Telephony Agent**
-- Gets call metadata and recordings through the telephony provider API.
-- Downloads audio only when required.
-- Sends audio through Speech-to-Text.
-- Stores transcript, timestamps and call metadata.
-- Does not expose raw recordings to the LLM unless necessary.
+### Telephony Agent
+Collects call metadata and recordings, sends required audio through speech-to-text, and stores transcript metadata. Raw recordings should not be exposed to the model unless necessary.
 
-**Analytics Agent**
-- Calculates deterministic KPIs first: number of deals, conversion, revenue/value, overdue tasks, activity and response speed.
-- Uses an LLM for qualitative analysis: objections, communication quality, recurring failure patterns and coaching opportunities.
-- Separates measured facts from model-generated interpretations.
+### Analytics Agent
+Uses deterministic calculations for KPIs and AI analysis for qualitative signals such as objections, communication patterns and coaching opportunities.
 
-**Report Generator**
-Produces:
-1. Executive summary.
-2. KPI table.
-3. Funnel and manager-level analysis.
-4. Problems and evidence.
-5. Call-quality findings.
-6. Recommended actions.
-7. Confidence and data-quality notes.
+### Report Generator
+Produces an evidence-backed report with:
 
-### Data flow
+1. executive summary;
+2. KPI table;
+3. funnel and manager analysis;
+4. problems with evidence;
+5. call-quality findings;
+6. recommendations;
+7. confidence and data-quality notes.
 
-1. Manager asks for a 30-day sales analysis.
-2. Orchestrator creates a report job with a fixed from/to interval.
-3. CRM Agent pulls relevant deals/tasks from amoCRM.
-4. Telephony Agent pulls calls for the same period.
-5. Calls are transcribed and classified.
-6. Analytics Agent combines deterministic metrics with transcript-derived signals.
-7. Report Generator produces the final report.
-8. Confidence and policy checks decide whether the report can be delivered automatically or requires human review.
-9. The final report and provenance are stored.
+## Human-in-the-loop
 
-### Storage
+AI should not silently make high-impact employment decisions.
+
+Human review is required for:
+- disciplinary conclusions;
+- compensation or target changes;
+- customer-impacting actions;
+- ambiguous cases;
+- incomplete or low-quality evidence;
+- low-confidence recommendations.
+
+The design separates **what the data shows** from **what the model infers**.
+
+## Data architecture
 
 **PostgreSQL**
 - normalized CRM snapshots
@@ -91,10 +75,10 @@ Produces:
 - KPI results
 - analysis results
 - report versions
-- source/provenance references
+- provenance
 
-**Object storage (S3-compatible)**
-- original audio when retention is permitted
+**S3-compatible object storage**
+- permitted audio
 - generated artifacts
 
 **Redis**
@@ -102,180 +86,77 @@ Produces:
 - caching
 - rate-limit coordination
 
-Secrets and API tokens are stored in a secrets manager/environment, never in source control.
+Secrets remain outside source control.
 
----
+## Data flow
 
-## 2. What the system does itself vs. human-in-the-loop
+```
+request
+  ↓
+fixed time interval
+  ↓
+CRM + telephony ingestion
+  ↓
+normalization / transcription
+  ↓
+deterministic KPI calculation
+  ↓
+qualitative AI analysis
+  ↓
+evidence-backed report
+  ↓
+confidence / policy gate
+  ↓
+human review when required
+```
 
-### Automated
+## Integration example
 
-The system can automatically:
-- collect data;
-- normalize CRM and telephony records;
-- transcribe calls;
-- calculate deterministic KPIs;
-- identify overdue/missing tasks;
-- detect recurring patterns in calls;
-- compare managers and periods;
-- generate a draft report;
-- attach evidence and source references;
-- assign confidence scores.
+The repository includes a Python amoCRM example in `src/amocrm_overdue_deals.py`.
 
-### Human review
+It demonstrates:
+- `GET /api/v4/leads`;
+- task lookup through `GET /api/v4/tasks`;
+- detection of deals without tasks;
+- detection of overdue incomplete tasks;
+- environment-based credentials.
 
-A human should remain responsible for:
-- personnel decisions;
-- disciplinary conclusions;
-- changing compensation or targets;
-- customer-impacting actions;
-- conclusions based on incomplete/low-quality recordings;
-- ambiguous cases where the model confidence is low;
-- approving recommendations that can materially affect an employee or customer.
-
-The AI should recommend and explain, not silently make high-impact employment decisions.
-
----
-
-## 3. Main risks and limitations
-
-### 1. Data quality and completeness
-CRM records can be incomplete, calls can be missing, tasks can be incorrectly linked, and different systems can use different identifiers. The report must expose coverage and data-quality warnings.
-
-### 2. STT/LLM errors
-Speech recognition can mishear names, numbers or objections. LLMs can over-interpret conversations. Deterministic KPIs therefore come from structured data, while qualitative findings must include evidence and confidence.
-
-### 3. Security and privacy
-Call recordings and transcripts may contain personal or confidential information. Access must be role-based, data retention must be limited, secrets must not enter prompts/logs, and sensitive data must be protected in transit and at rest.
-
----
-
-## 4. amoCRM integration example
-
-The repository contains a small Python example in src/amocrm_overdue_deals.py.
-
-It:
-- calls GET /api/v4/leads;
-- checks tasks through GET /api/v4/tasks;
-- identifies deals without tasks;
-- identifies deals with incomplete tasks whose complete_till is in the past;
-- reads the access token and base URL from environment variables.
-
-amoCRM documents GET /api/v4/leads for listing deals and GET /api/v4/tasks with filters including entity_type, entity_id and is_completed; task deadlines are represented by complete_till as a Unix timestamp.
-
-For a production implementation I would add pagination, retry/backoff, rate-limit handling, batching where supported, structured logging and metrics.
-
----
-
-## 5. Real AI project
-
-### HEAN — event-driven AI/algorithmic trading platform
-
-**Task:** build an automated research and trading platform capable of collecting market signals, evaluating strategies, managing execution and risk, and exposing system state through an operational dashboard.
-
-**Stack:**
-- Python
-- FastAPI
-- asyncio
-- WebSocket
-- Redis
-- PostgreSQL
-- Docker
-- React / Vite
-- Pydantic
-- pytest
-- C++ / Rust components for performance-sensitive workloads
-
-**Architecture:**
-- event-driven services;
-- market-perception adapters;
-- strategy and hypothesis layer;
-- decision memory;
-- execution routing;
-- risk controls / kill switch;
-- telemetry and monitoring;
-- web dashboard.
-
-The project is private, so implementation details and credentials are intentionally not exposed in this test repository.
-
----
-
-## 6. What I learned independently during the last six months
-
-I focused on practical AI-agent and backend engineering rather than only model prompting.
-
-### Main areas
-
-- LLM and AI-agent architectures.
-- Multi-agent orchestration and tool calling.
-- MCP and external-system integrations.
-- Async Python with FastAPI and WebSockets.
-- Event-driven architecture.
-- Docker and reproducible service environments.
-- PostgreSQL and Redis in distributed applications.
-- OAuth/API authentication patterns.
-- Observability, telemetry and operational debugging.
-- Git/GitHub workflows and CI/CD.
-
-### Application
-
-I applied these technologies directly while developing HEAN: agents/services communicate through events, external APIs are isolated behind adapters, state is persisted, and telemetry is exposed so failures can be diagnosed instead of hidden.
-
----
-
-## 7. Example of a self-proposed improvement
-
-In the trading platform, I identified that event floods and queue saturation could make the system appear alive while important processing was delayed.
-
-Instead of treating this only as an isolated bug, I proposed and implemented an observability layer:
-- periodic heartbeat;
-- telemetry aggregation;
-- WebSocket telemetry topics;
-- REST telemetry endpoints;
-- portfolio/system summaries;
-- clearer operational signals for diagnosing bottlenecks.
-
-The result was a system where queue pressure, service health and processing state became visible and measurable, making debugging and further optimization substantially more systematic.
-
----
+For production I would add pagination, retry/backoff, rate-limit handling, batching where supported, structured logging and metrics.
 
 ## Production evolution
 
-For a production CityCar implementation I would add:
-- OAuth/token refresh for amoCRM.
-- Webhooks for incremental synchronization.
-- Idempotent ingestion and job IDs.
-- Async workers/queue.
-- S3-compatible encrypted audio storage.
-- STT provider abstraction.
-- LLM provider abstraction and prompt/version registry.
-- PII redaction before LLM processing.
-- RBAC and audit logs.
-- Evaluation dataset for call classification.
-- Human review queue.
-- Confidence calibration.
-- Monitoring for latency, coverage, STT failure rate, token cost, report quality and API errors.
-- Automated tests and CI.
+A production implementation should add:
+
+- OAuth/token refresh;
+- webhook-driven incremental sync;
+- idempotent ingestion and job IDs;
+- asynchronous workers/queue;
+- encrypted object storage;
+- STT and LLM provider abstractions;
+- PII redaction before model calls;
+- RBAC and audit logs;
+- evaluation datasets;
+- human-review queue;
+- confidence calibration;
+- monitoring for latency, coverage, failures, cost and report quality;
+- automated tests and CI.
+
+## Related engineering work
+
+This case study reflects patterns used in my other AI systems: agent orchestration, API integrations, asynchronous services, event-driven processing, observability and human-in-the-loop controls.
 
 ## Repository structure
 
-~~~
+```
 citycar-ai-agent-test/
 ├── README.md
 ├── architecture/
-│   └── architecture.md
 ├── docs/
-│   ├── ai-agents.md
-│   ├── human-in-the-loop.md
-│   └── experience.md
 ├── src/
-│   └── amocrm_overdue_deals.py
-├── .gitignore
-├── .env.example
-└── requirements.txt
-~~~
+├── requirements.txt
+└── .env.example
+```
 
-## References
+## License
 
-- amoCRM Leads API: https://www.amocrm.ru/developers/content/crm_platform/leads-api
-- amoCRM Tasks API: https://www.amocrm.ru/developers/content/crm_platform/tasks-api
+Educational / technical case study.
